@@ -1,0 +1,93 @@
+from datetime import datetime, timedelta
+from flask import Flask, jsonify, request, g
+from pymongo import MongoClient
+import numpy as np
+from sklearn.ensemble import IsolationForest
+
+app = Flask(__name__)
+client = MongoClient("mongodb://localhost:27017/")
+db = client["security_db"]
+col_acc = db["acessos"]
+
+
+@app.before_request
+def pre():
+  g.rid = col_acc.insert_one({
+      "ip": request.remote_addr,
+      "rota": request.path,
+      "metodo": request.method,
+      "timestamp": datetime.utcnow(),
+      "status_code": None,
+  }).inserted_id
+
+
+@app.after_request
+def pos(resp):
+  if hasattr(g, "rid"):
+    col_acc.update_one({"_id": g.rid}, {"$set": {"status_code": resp.status_code}})
+  if request.remote_addr and anomalia(request.remote_addr):
+    r = jsonify({"erro": "muitas requisições"})
+    r.status_code = 429
+    r.headers["Retry-After"] = "60"
+    return r
+  return resp
+
+
+def anomalia(ip_alvo):
+  limite = datetime.utcnow() - timedelta(minutes=5)
+  pipeline = [
+      {"$match": {"timestamp": {"$gte": limite}}},
+      {
+          "$group": {
+              "_id": "$ip",
+              "reqs": {"$sum": 1},
+              "e4xx": {
+                  "$sum": {
+                      "$cond": [
+                          {
+                              "$and": [
+                                  {"$gte": ["$status_code", 400]},
+                                  {"$lt": ["$status_code", 500]},
+                              ]
+                          },
+                          1,
+                          0,
+                      ]
+                  }
+              },
+              "rotas": {"$addToSet": "$rota"},
+          }
+      },
+      {
+          "$project": {
+              "ip": "$_id",
+              "rpm": {"$divide": ["$reqs", 5.0]},
+              "t4xx": {
+                  "$cond": [
+                      {"$eq": ["$reqs", 0]},
+                      0,
+                      {"$divide": ["$e4xx", "$reqs"]},
+                  ]
+              },
+              "rotas": {"$size": "$rotas"},
+          }
+      },
+  ]
+  res = list(col_acc.aggregate(pipeline))
+  if len(res) < 2:
+    return False
+  ips = [r["ip"] for r in res]
+  feats = np.array([[r["rpm"], r["t4xx"], r["rotas"]] for r in res])
+  iso = IsolationForest(contamination=0.2, random_state=42)
+  preds = iso.fit_predict(feats)
+  return {ips[i]: (preds[i] == -1) for i in range(len(ips))}.get(ip_alvo, False)
+
+
+@app.route("/", methods=["GET"])
+def index():
+  return "OK", 200
+
+
+if __name__ == "__main__":
+  col_acc.drop()
+  app.run(debug=False, port=5000)
