@@ -1,0 +1,74 @@
+def recomendar(perfil):
+    
+    schema_fixo = perfil.get("schema_fixo", False)
+    precisa_acid = perfil.get("precisa_acid", False)
+    escala_horizontal = perfil.get("escala_horizontal", False)
+    tolera_atraso = perfil.get("tolera_atraso_de_consistencia", False)
+    dado_sensivel = perfil.get("dado_sensivel", False)
+
+   
+    if precisa_acid and schema_fixo:
+        banco = "MySQL"
+        cap = "CP"
+        justificativa = "consistência estrita e integridade transacional são obrigatórias para evitar corrupção"
+        risco_owasp = "A07" if dado_sensivel else "A04"
+    elif escala_horizontal or tolera_atraso:
+        banco = "MongoDB"
+        cap = "AP"
+        justificativa = "disponibilidade e escalabilidade horizontal superam a necessidade de consistência imediata"
+        risco_owasp = "A09" if not dado_sensivel else "A01"
+    else:
+        banco = "MySQL"
+        cap = "CP"
+        justificativa = "modelo padrão relacional atende melhor os requisitos estruturados básicos"
+        risco_owasp = "A05"
+
+    return {
+        "banco": banco,
+        "cap": cap,
+        "justificativa": justificativa,
+        "risco_owasp": risco_owasp
+    }
+
+perfis = {
+    "credenciais_do_soc": {
+        "schema_fixo": True, 
+        "precisa_acid": True, 
+        "escala_horizontal": False, 
+        "tolera_atraso_de_consistencia": False, 
+        "dado_sensivel": True
+    },
+    "telemetria_de_sensores": {
+        "schema_fixo": False, 
+        "precisa_acid": False, 
+        "escala_horizontal": True, 
+        "tolera_atraso_de_consistencia": True, 
+        "dado_sensivel": False
+    },
+    "trilha_de_auditoria": {
+        "schema_fixo": False, 
+        "precisa_acid": False, 
+        "escala_horizontal": True, 
+        "tolera_atraso_de_consistencia": False, 
+        "dado_sensivel": True
+    },
+    "carrinho_de_licencas": {
+        "schema_fixo": True, 
+        "precisa_acid": True, 
+        "escala_horizontal": False, 
+        "tolera_atraso_de_consistencia": False, 
+        "dado_sensivel": False
+    },
+    "cache_de_sessoes": {
+        "schema_fixo": True, 
+        "precisa_acid": False, 
+        "escala_horizontal": True, 
+        "tolera_atraso_de_consistencia": True, 
+        "dado_sensivel": True
+    }
+}
+
+if __name__ == "__main__":
+    for nome, p in perfis.items():
+        resultado = recomendar(p)
+        print(f"{nome} -> {resultado['banco']} | {resultado['cap']} | \"{resultado['justificativa']}\" | {resultado['risco_owasp']}")
