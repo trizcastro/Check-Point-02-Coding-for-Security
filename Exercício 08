@@ -1,0 +1,77 @@
+from datetime import datetime
+from flask import Flask, jsonify, request
+import numpy as np
+from pymongo import MongoClient
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import confusion_matrix, f1_score, precision_score, recall_score
+from sklearn.model_selection import train_test_split
+
+app = Flask(__name__)
+client = MongoClient("mongodb://localhost:27017/")
+db = client["security_db"]
+col_prev = db["previsoes"]
+
+modelo = None
+metricas_cache = {}
+
+
+def treinar():
+  global modelo, metricas_cache
+  np.random.seed(42)
+  X = np.vstack([
+      np.random.normal(loc=[1, 1, 1000, 12], scale=[1, 0.5, 200, 4], size=(100, 4)),
+      np.random.normal(
+          loc=[10, 6, 80000, 3], scale=[2, 1, 15000, 2], size=(100, 4)
+      ),
+  ])
+  y = np.array([0] * 100 + [1] * 100)
+  X_tr, X_te, y_tr, y_te = train_test_split(
+      X, y, test_size=0.3, random_state=42
+  )
+  modelo = LogisticRegression(random_state=42)
+  modelo.fit(X_tr, y_tr)
+  y_pred = modelo.predict(X_te)
+
+  metricas_cache = {
+      "precisao": round(float(precision_score(y_te, y_pred, zero_division=0)), 2),
+      "recall": round(float(recall_score(y_te, y_pred, zero_division=0)), 2),
+      "f1": round(float(f1_score(y_te, y_pred, zero_division=0)), 2),
+      "matriz": confusion_matrix(y_te, y_pred).tolist(),
+      "aviso": (
+          "A acurácia foi omitida porque em segurança cibernética as classes"
+          " são altamente desequilibradas, mascarando falsos negativos"
+          " críticos."
+      ),
+  }
+
+
+@app.route("/api/triagem", methods=["POST"])
+def triagem():
+  if not request.is_json:
+    return jsonify({"erro": "JSON obrigatório"}), 400
+  d = request.get_json()
+  f = d.get("features")
+  if not isinstance(f, list) or len(f) != 4:
+    return jsonify({"erro": "Esperadas exatamente 4 features em lista"}), 400
+  if not all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in f):
+    return jsonify({"erro": "Features devem ser estritamente numéricas"}), 400
+
+  prob = float(max(modelo.predict_proba([f])[0]))
+  risco = "alto" if modelo.predict([f])[0] == 1 else "baixo"
+  res = {"risco": risco, "confianca": round(prob, 2)}
+
+  col_prev.insert_one(
+      {"input": f, "saida": res, "timestamp": datetime.utcnow()}
+  )
+  return jsonify(res), 200
+
+
+@app.route("/api/modelo/metricas", methods=["GET"])
+def metricas():
+  return jsonify(metricas_cache), 200
+
+
+if __name__ == "__main__":
+  treinar()
+  col_prev.drop()
+  app.run(debug=False, port=5000)
