@@ -1,0 +1,93 @@
+from flask import Flask, jsonify, request
+import mysql.connector
+
+app = Flask(__name__)
+
+mysql_config = {
+    "host": "localhost",
+    "user": "root",
+    "password": "senha",
+    "database": "security_db",
+}
+
+
+def inicializar_banco():
+  conn = mysql.connector.connect(**mysql_config)
+  cursor = conn.cursor()
+  cursor.execute("DROP TABLE IF EXISTS incidentes;")
+  cursor.execute("DROP TABLE IF EXISTS analistas;")
+  cursor.execute("""
+        CREATE TABLE analistas (
+            id INT PRIMARY KEY,
+            nome VARCHAR(50),
+            api_key VARCHAR(100) UNIQUE,
+            nivel INT
+        );
+    """)
+  cursor.execute("""
+        CREATE TABLE incidentes (
+            id INT PRIMARY KEY,
+            dono_id INT,
+            titulo VARCHAR(100),
+            severidade VARCHAR(50),
+            status VARCHAR(50),
+            FOREIGN KEY (dono_id) REFERENCES analistas(id)
+        );
+    """)
+  cursor.executemany(
+      "INSERT INTO analistas VALUES (%s, %s, %s, %s);",
+      [(1, "ana", "key-ana-001", 5), (2, "bruno", "key-bruno-002", 2)],
+  )
+  cursor.executemany(
+      "INSERT INTO incidentes VALUES (%s, %s, %s, %s, %s);",
+      [
+          (1, 1, "Brute force SSH", "critica", "aberto"),
+          (2, 2, "Phishing no RH", "media", "aberto"),
+      ],
+  )
+  conn.commit()
+  cursor.close()
+  conn.close()
+
+
+def autenticar_analista():
+  api_key = request.headers.get("X-API-Key")
+  if not api_key:
+    return None, 401
+  conn = mysql.connector.connect(**mysql_config)
+  cursor = conn.cursor(dictionary=True)
+  cursor.execute(
+      "SELECT id, nome, nivel FROM analistas WHERE api_key = %s;", (api_key,)
+  )
+  analista = cursor.fetchone()
+  cursor.close()
+  conn.close()
+  if not analista:
+    return None, 401
+  return analista, 200
+
+
+@app.route("/api/incidentes/<int:id_incidente>", methods=["GET"])
+def obter_incidente(id_incidente):
+  analista, status_code = autenticar_analista()
+  if not analista:
+    return jsonify({"erro": "Não autorizado"}), status_code
+
+  conn = mysql.connector.connect(**mysql_config)
+  cursor = conn.cursor(dictionary=True)
+  cursor.execute("SELECT * FROM incidentes WHERE id = %s;", (id_incidente,))
+  incidente = cursor.fetchone()
+  cursor.close()
+  conn.close()
+
+  if not incidente or (
+      analista["nivel"] < 5 and incidente["dono_id"] != analista["id"]
+  ):
+    return jsonify({"erro": "Recurso não encontrado ou acesso negado"}), 404
+
+  return jsonify(incidente), 200
+
+
+if __name__ == "__main__":
+  inicializar_banco()
+  app.run(debug=False, port=5000)
