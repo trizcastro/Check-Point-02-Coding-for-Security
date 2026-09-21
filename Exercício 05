@@ -1,0 +1,66 @@
+from flask import Flask, jsonify, request
+import mysql.connector
+
+app = Flask(__name__)
+
+mysql_config = {
+    "host": "localhost",
+    "user": "root",
+    "password": "senha",
+    "database": "security_db",
+}
+
+COLUNAS_PERMITIDAS = {
+    "data": "criado_em",
+    "sev": "severidade",
+    "ip": "ip_origem",
+    "criado_em": "criado_em",
+}
+ORDENS_PERMITIDAS = {"asc": "ASC", "desc": "DESC"}
+
+
+@app.route("/api/eventos", methods=["GET"])
+def api_eventos():
+
+  param_col = request.args.get("ordenar_por", "data")
+  param_ordem = request.args.get("ordem", "asc").lower()
+  param_tamanho = request.args.get("tamanho", "10")
+
+  try:
+    tamanho = int(param_tamanho)
+  except ValueError:
+    return jsonify({"erro": "tamanho deve ser inteiro"}), 400
+
+  if tamanho > 100:
+    tamanho = 100
+  elif tamanho < 1:
+    tamanho = 1
+
+  if param_col not in COLUNAS_PERMITIDAS:
+    return jsonify({"erro": "campo de ordenação inválido"}), 400
+  coluna_sql = COLUNAS_PERMITIDAS[param_col]
+
+  if param_ordem not in ORDENS_PERMITIDAS:
+    ordem_sql = "ASC"
+  else:
+    ordem_sql = ORDENS_PERMITIDAS[param_ordem]
+
+  conn = mysql.connector.connect(**mysql_config)
+  cursor = conn.cursor(dictionary=True)
+
+  try:
+  
+    query = f"SELECT * FROM eventos ORDER BY {coluna_sql} {ordem_sql} LIMIT %s;"
+    cursor.execute(query, (tamanho,))
+    resultados = cursor.fetchall()
+
+    return jsonify(resultados), 200
+
+  except Exception as e:
+    return jsonify({"erro": str(e)}), 500
+  finally:
+    cursor.close()
+    conn.close()
+
+if __name__ == "__main__":
+  app.run(debug=True, port=5000)
