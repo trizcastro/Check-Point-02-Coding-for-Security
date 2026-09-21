@@ -1,0 +1,103 @@
+import mysql.connector
+from pymongo import MongoClient
+
+
+mysql_config = {
+    "host": "localhost",
+    "user": "root",
+    "password": "senha",
+    "database": "security_db"
+}
+
+mongo_client = MongoClient("mongodb://localhost:27017/")
+mongo_db = mongo_client["security_db"]
+mongo_collection = mongo_db["alertas"]
+
+def migrar_relacional_para_documento():
+
+    conn = mysql.connector.connect(**mysql_config)
+    cursor = conn.cursor()
+    
+    cursor.execute("DROP TABLE IF EXISTS alertas;")
+    cursor.execute("DROP TABLE IF EXISTS ativos;")
+    
+    cursor.execute("""
+        CREATE TABLE ativos (
+            id INT PRIMARY KEY,
+            nome VARCHAR(50),
+            ip VARCHAR(50) UNIQUE,
+            criticidade ENUM('baixa', 'media', 'alta')
+        );
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE alertas (
+            id INT PRIMARY KEY,
+            ativo_id INT,
+            tipo VARCHAR(50),
+            severidade VARCHAR(50),
+            criado_em VARCHAR(50),
+            FOREIGN KEY (ativo_id) REFERENCES ativos(id)
+        );
+    """)
+    
+    ativos_dados = [
+        (1, "SRV-WEB01", "192.168.1.10", "alta"),
+        (2, "PC-RH03", "192.168.1.45", "baixa")
+    ]
+    cursor.executemany("INSERT INTO ativos VALUES (%s, %s, %s, %s);", ativos_dados)
+    
+    alertas_dados = [
+        (1, 1, "BRUTE_FORCE", "critica", "2026-09-20"),
+        (2, 1, "PORT_SCAN", "alta", "2026-09-20"),
+        (3, 2, "XSS", "media", "2026-09-20")
+    ]
+    cursor.executemany("INSERT INTO alertas VALUES (%s, %s, %s, %s, %s);", alertas_dados)
+    conn.commit()
+
+    query_join = """
+        SELECT a.id, a.tipo, a.severidade, at.nome, at.ip, at.criticidade
+        FROM alertas a
+        JOIN ativos at ON a.ativo_id = at.id;
+    """
+    cursor.execute(query_join)
+    resultados_mysql = cursor.fetchall()
+    
+    total_mysql_alertas = len(resultados_mysql)
+
+    documentos_mongo = []
+    for row in resultados_mysql:
+      )
+        doc = {
+            "tipo": row[1],
+            "severidade": row[2],
+            "ativo": {
+                "nome": row[3],
+                "ip": row[4],
+                "criticidade": row[5]
+            }
+        }
+        documentos_mongo.append(doc)
+
+    
+    mongo_collection.delete_many({})
+    
+    if documentos_mongo:
+        mongo_collection.insert_many(documentos_mongo)
+
+    
+    total_mongo_alertas = mongo_collection.count_documents({})
+    
+    print(f"MySQL: {total_mysql_alertas} alertas | MongoDB: {total_mongo_alertas} documentos -> " + 
+          ("MIGRAÇÃO ÍNTEGRA" if total_mysql_alertas == total_mongo_alertas else "FALHA NA MIGRAÇÃO"))
+
+  
+    filtro_alta = {"ativo.criticidade": "alta"}
+    qtd_sem_join = mongo_collection.count_documents(filtro_alta)
+    print(f"Consulta sem JOIN: db.alertas.find({filtro_alta}) -> {qtd_sem_join} documentos")
+
+    cursor.close()
+    conn.close()
+
+if __name__ == "__main__":
+    migrar_relacional_para_documento()
