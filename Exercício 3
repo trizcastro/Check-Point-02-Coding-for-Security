@@ -1,0 +1,77 @@
+from datetime import datetime, timedelta
+import random
+from pymongo import MongoClient
+
+
+client = MongoClient("mongodb://localhost:27017/")
+db = client["security_db"]
+colecao_eventos = db["eventos"]
+
+def executar_exercicio_3():
+    colecao_eventos.drop()
+    colecao_eventos.create_index("timestamp", expireAfterSeconds=604800)
+
+    agora = datetime.utcnow()
+    eventos_para_inserir = []
+    
+    tipos_falha = ["BRUTE_FORCE", "SQL_INJECTION", "XSS", "UNAUTHORIZED", "PORT_SCAN"]
+
+    for _ in range(200):
+    
+        horas_atras = random.uniform(0, 24)
+        tempo_evento = agora - timedelta(hours=horas_atras)
+        
+        evento = {
+            "tipo": random.choice(tipos_falha),
+            "severidade": random.choice(["baixa", "media", "alta", "critica"]),
+            "timestamp": tempo_evento
+        }
+        eventos_para_inserir.append(evento)
+
+    if eventos_para_inserir:
+        colecao_eventos.insert_many(eventos_para_inserir)
+
+    pipeline = [
+        {
+            "$match": {
+                "timestamp": {"$gte": agora - timedelta(hours=24)}
+            }
+        },
+        {
+            "$group": {
+                "_id": {"$hour": "$timestamp"},
+                "total": {"$sum": 1}
+            }
+        },
+        {
+            "$sort": {"_id": 1}
+        }
+    ]
+
+    resultados = list(colecao_eventos.aggregate(pipeline))
+
+    print("=== Falhas por hora (últimas 24h) ===")
+    
+    maior_hora = None
+    maior_total = -1
+    
+    mapa_horas = {res["_id"]: res["total"] for res in resultados}
+
+    for h in range(24):
+        total = mapa_horas.get(h, 0)
+        barra = "█" * (total // 2) 
+        pico_tag = " <- pico" if total > maior_total else ""
+        
+        if total > maior_total:
+            maior_total = total
+            maior_hora = h
+
+        print(f"{h:02d}h | {barra} {total}{pico_tag}")
+
+    hora_formatada = f"{maior_hora:02d}h" if maior_hora is not None else "00h"
+    print(f"\nHora de pico: {hora_formatada} ({maior_total} falhas)")
+    print("Índice TTL ativo: eventos com mais de 7 dias serão removidos automaticamente.")
+    print("Comentário: O TTL é uma decisão de segurança vital para mitigar riscos de vazamento de PII/logs sensíveis em conformidade com a LGPD/GDPR e reduzir superfícies de ataque em caso de brecha.")
+
+if __name__ == "__main__":
+    executar_exercicio_3()
