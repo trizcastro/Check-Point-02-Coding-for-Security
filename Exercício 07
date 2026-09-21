@@ -1,0 +1,82 @@
+from flask import Flask, make_response, render_template_string, request
+from pymongo import MongoClient
+
+app = Flask(__name__)
+client = MongoClient("mongodb://localhost:27017/")
+db = client["security_db"]
+col_dashboard = db["dashboard_incidentes"]
+
+
+def inicializar_dados():
+  col_dashboard.drop()
+  col_dashboard.insert_many([
+      {"id": 1, "titulo": "Falha Auth", "ativo_nome": "<script>alert('xss1')</script>"},
+      {
+          "id": 2,
+          "titulo": "Injeção",
+          "ativo_nome": 'x" onerror="alert(\'xss2\')',
+      },
+  ])
+
+
+TEMPLATE = """
+<!doctype html>
+<html>
+<head><title>{{ titulo }}</title></head>
+<body>
+    <h1>{{ titulo }}</h1>
+    <table>
+    {% for inc in incidentes %}
+        <tr>
+            <td>{{ inc.id }}</td>
+            <td>
+                {% if seguro %}
+                    <img src="/icone.png" alt="{{ inc.ativo_nome }}">
+                {% else %}
+                    <img src="/icone.png" alt="{{ inc.ativo_nome | safe }}">
+                {% endif %}
+            </td>
+        </tr>
+    {% endfor %}
+    </table>
+</body>
+</html>
+"""
+
+
+@app.after_request
+def csp(response):
+  response.headers["Content-Security-Policy"] = "default-src 'self'"
+  return response
+
+
+@app.route("/dashboard", methods=["GET"])
+def dashboard():
+  incs = list(col_dashboard.find({}, {"_id": 0}))
+  return render_template_string(
+      TEMPLATE,
+      incidentes=incs,
+      titulo="Dashboard Seguro",
+      seguro=True,
+  )
+
+
+@app.route("/dashboard-inseguro", methods=["GET"])
+def dashboard_inseguro():
+  incs = list(col_dashboard.find({}, {"_id": 0}))
+  return render_template_string(
+      TEMPLATE,
+      incidentes=incs,
+      titulo="Dashboard Inseguro",
+      seguro=False,
+  )
+
+
+@app.route("/icone.png")
+def icone():
+  return "", 204
+
+
+if __name__ == "__main__":
+  inicializar_dados()
+  app.run(debug=False, port=5000)
