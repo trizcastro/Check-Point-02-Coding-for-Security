@@ -1,0 +1,136 @@
+from datetime import datetime
+import mysql.connector
+from pymongo import MongoClient
+
+mysql_config = {
+    "host": "localhost",
+    "user": "root",
+    "password": "senha",
+    "database": "security_db",
+}
+
+mongo_client = MongoClient("mongodb://localhost:27017/")
+mongo_db = mongo_client["security_db"]
+colecao_auditoria = mongo_db["auditoria"]
+
+
+def inicializar_banco_mysql():
+  
+  conn = mysql.connector.connect(**mysql_config)
+  cursor = conn.cursor()
+  cursor.execute("DROP TABLE IF EXISTS usuarios;")
+  cursor.execute("""
+        CREATE TABLE usuarios (
+            id INT PRIMARY KEY,
+            nome VARCHAR(50),
+            email VARCHAR(50),
+            nivel_acesso INT
+        );
+    """)
+  usuarios_iniciais = [
+      (1, "ana", "ana@x.com", 5),
+      (2, "bruno", "bruno@x.com", 2),
+      (3, "caio", "caio@x.com", 1),
+  ]
+  cursor.executemany(
+      "INSERT INTO usuarios VALUES (%s, %s, %s, %s);", usuarios_iniciais
+  )
+  conn.commit()
+  cursor.close()
+  conn.close()
+
+
+def alterar_nivel(admin_id, alvo_id, novo_nivel):
+  
+  conn = mysql.connector.connect(**mysql_config)
+  cursor = conn.cursor(dictionary=True)
+
+  resultado_status = "RECUSADO"
+  nivel_anterior = 0
+  quem_nome = f"ID_{admin_id}"
+  alvo_nome = f"ID_{alvo_id}"
+
+  try:
+    
+    conn.start_transaction()
+
+    cursor.execute(
+        "SELECT id, nome, nivel_acesso FROM usuarios WHERE id = %s;", (admin_id,)
+    )
+    admin = cursor.fetchone()
+    if not admin:
+      raise ValueError("Administrador inexistente")
+
+    quem_nome = admin["nome"]
+
+    if admin["nivel_acesso"] < 5:
+      raise ValueError("Admin sem privilégio suficiente")
+
+    if admin_id == alvo_id:
+      raise ValueError("Tentativa de auto-promoção bloqueada")
+
+    cursor.execute(
+        "SELECT id, nome, nivel_acesso FROM usuarios WHERE id = %s;", (alvo_id,)
+    )
+    alvo = cursor.fetchone()
+    if not alvo:
+      raise ValueError("Utilizador alvo inexistente")
+
+    alvo_nome = alvo["nome"]
+    nivel_anterior = alvo["nivel_acesso"]
+
+    cursor.execute(
+        "UPDATE usuarios SET nivel_acesso = %s WHERE id = %s;",
+        (novo_nivel, alvo_id),
+    )
+
+    conn.commit()
+    resultado_status = "SUCESSO"
+
+  except Exception as e:
+   
+    conn.rollback()
+
+    try:
+      cursor.execute(
+          "SELECT nome, nivel_acesso FROM usuarios WHERE id = %s;", (alvo_id,)
+      )
+      res_alvo = cursor.fetchone()
+      if res_alvo:
+        alvo_nome = res_alvo["nome"]
+        nivel_anterior = res_alvo["nivel_acesso"]
+    except:
+      pass
+
+  finally:
+    cursor.close()
+    conn.close()
+
+    registro_auditoria = {
+        "quem": quem_nome,
+        "alvo": alvo_nome,
+        "nivel_anterior": nivel_anterior,
+        "novo_nivel": novo_nivel,
+        "resultado": resultado_status,
+        "timestamp": datetime.utcnow(),
+    }
+    colecao_auditoria.insert_one(registro_auditoria)
+
+
+if __name__ == "__main__":
+  inicializar_banco_mysql()
+  colecao_auditoria.delete_many({}) 
+
+  print("--- Executando Casos de Teste ---")
+  alterar_nivel(1, 2, 4)
+  alterar_nivel(2, 3, 5)
+  alterar_nivel(1, 1, 9)
+  alterar_nivel(1, 99, 3) 
+
+  total_docs = colecao_auditoria.count_documents({})
+  total_recusados = colecao_auditoria.count_documents(
+      {"resultado": "RECUSADO"}
+  )
+
+  print(f"\nTrilha de auditoria ao final: {total_docs} documentos (1 sucesso, 3 recusadas)")
+  print(f"db.auditoria.count_documents({{'resultado': 'RECUSADO'}}): {total_recusados}")
